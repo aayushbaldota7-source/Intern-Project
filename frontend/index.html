@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrderPulse – Real-Time Order Notifications</title>
+  <meta name="description" content="Real-time order dashboard using PostgreSQL LISTEN/NOTIFY and Socket.IO" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ─────────────────────────────────────────── -->
+  <header class="header">
+    <div class="brand">
+      <div class="brand-logo">OP</div>
+      <div>
+        <div class="brand-name">OrderPulse</div>
+        <div class="brand-sub">Real-Time Order Dashboard</div>
+      </div>
+    </div>
+    <div class="conn-status">
+      <span id="conn-dot" class="dot dot-amber"></span>
+      <span id="conn-label">Connecting…</span>
+    </div>
+  </header>
+
+  <!-- ── Main layout: Sidebar + Panel ───────────────────── -->
+  <div class="layout">
+
+    <!-- ── Left: Create Order Form ────────────────────── -->
+    <aside class="sidebar">
+      <h2 class="sidebar-title">Create Order</h2>
+
+      <form id="create-form">
+        <div class="field">
+          <label for="inp-customer">Customer Name</label>
+          <input id="inp-customer" type="text" placeholder="e.g. Alice Chen" required />
+        </div>
+        <div class="field">
+          <label for="inp-product">Product Name</label>
+          <input id="inp-product" type="text" placeholder="e.g. Wireless Headphones" required />
+        </div>
+        <div class="field">
+          <label for="inp-status">Status</label>
+          <select id="inp-status">
+            <option value="pending">pending</option>
+            <option value="shipped">shipped</option>
+            <option value="delivered">delivered</option>
+          </select>
+        </div>
+        <button id="btn-create" type="submit" class="btn-primary">
+          + Create Order
+        </button>
+      </form>
+
+      <!-- Live Stats -->
+      <div class="stats-section">
+        <h3 class="stats-title">Live Stats</h3>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-num" id="stat-total">0</div>
+            <div class="stat-label">Orders</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num green" id="stat-inserts">0</div>
+            <div class="stat-label">Inserts</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num amber" id="stat-updates">0</div>
+            <div class="stat-label">Updates</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num red" id="stat-deletes">0</div>
+            <div class="stat-label">Deletes</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ── Right: Live Feed + Orders Table ────────────── -->
+    <main class="panel">
+
+      <!-- Event Log -->
+      <section class="section">
+        <div class="section-header">
+          <h2>Live Event Log</h2>
+          <span class="badge" id="event-count">0 events</span>
+          <button class="clear-btn" onclick="clearEvents()">Clear</button>
+        </div>
+        <div id="event-list">
+          <div class="empty-state">
+            <div class="empty-icon">📡</div>
+            <p>Waiting for database changes…</p>
+            <small>Create an order using the form to see real-time events</small>
+          </div>
+        </div>
+      </section>
+
+      <!-- Orders Table -->
+      <section class="section">
+        <div class="section-header">
+          <h2>Orders Table</h2>
+          <span class="badge accent">live via WebSocket</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Customer</th>
+                <th>Product</th>
+                <th>Status</th>
+                <th>Updated At</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="orders-body">
+              <tr>
+                <td colspan="6" class="empty-row">Loading orders…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- Socket.IO client served by the backend -->
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
