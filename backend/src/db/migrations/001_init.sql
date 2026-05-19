@@ -58,7 +58,5 @@ FOR EACH ROW EXECUTE FUNCTION notify_orders_change();
 
 -- ── Seed Data (optional) ─────────────────────────────────────
 INSERT INTO orders (customer_name, product_name, status) VALUES
-    ('Alice Chen',   'Wireless Headphones', 'pending'),
-    ('Bob Patel',    'Standing Desk',       'shipped'),
-    ('Clara Nguyen', '4K Monitor',          'delivered')
+    ('Rohit', 'Wireless Headphones', 'pending')
 ON CONFLICT DO NOTHING;

@@ -1,61 +1,106 @@
 # OrderPulse — Real-Time Order Notification System
 
-A simple backend system where connected clients automatically receive updates whenever the database changes — **no polling needed**.
+A production-grade system where connected clients **automatically receive database updates in real time — no polling required**.
 
 ---
 
 ## Problem Statement
 
-Build a system where connected clients automatically receive updates whenever the database changes, without using frequent polling.
+Design and implement a system where clients receive updates automatically whenever data in the database changes, without relying on frequent polling.
 
 ### Database Table: `orders`
 
 | Column | Type | Description |
 |---|---|---|
-| `id` | SERIAL PRIMARY KEY | Auto-incremented ID |
-| `customer_name` | VARCHAR | Name of the customer |
-| `product_name` | VARCHAR | Name of the product |
-| `status` | VARCHAR | `pending`, `shipped`, or `delivered` |
-| `updated_at` | TIMESTAMPTZ | Last modified timestamp |
+| `id` | SERIAL PRIMARY KEY | Auto-incremented unique ID |
+| `customer_name` | VARCHAR(255) | Name of the customer |
+| `product_name` | VARCHAR(255) | Name of the product ordered |
+| `status` | VARCHAR(50) | One of: `pending`, `shipped`, `delivered` |
+| `updated_at` | TIMESTAMPTZ | Timestamp of last change |
 
-### Requirements
+### Requirements Met
 
-- Any `INSERT`, `UPDATE`, or `DELETE` on the `orders` table should notify all connected clients in real time.
-- Clients should receive updates **without polling** the server repeatedly.
-- The frontend should update automatically whenever a change happens.
-
-### Deliverables
-
-- ✅ Backend service that listens for DB changes using **PostgreSQL LISTEN/NOTIFY**
-- ✅ Real-time updates pushed to clients using **Socket.IO (WebSocket)**
-- ✅ Simple frontend dashboard showing live orders and an event log
-- ✅ REST API to create, update, and delete orders
-- ✅ Docker setup for easy deployment
-- ✅ README with setup instructions
+- ✅ Any `INSERT`, `UPDATE`, or `DELETE` on `orders` triggers a real-time notification to all clients
+- ✅ Clients receive updates **without polling** — using WebSockets (Socket.IO)
+- ✅ Working backend service (Node.js) that listens for DB changes and pushes them to clients
+- ✅ Browser-based client that shows live order updates and a real-time event log
+- ✅ Documentation explaining the approach, how to run, and why this method was chosen
 
 ---
 
 ## How It Works
 
 ```
-1. A REST API call (POST/PUT/DELETE) changes a row in PostgreSQL.
-2. A PostgreSQL trigger fires automatically and calls pg_notify().
-3. The backend has a dedicated LISTEN connection that receives the notification.
-4. The backend broadcasts the change to all clients via Socket.IO.
-5. The browser updates the UI instantly — no polling required.
+┌────────────┐    REST API     ┌─────────────────────────────┐
+│  Browser   │ ─────────────► │  Node.js + Express Backend  │
+│  Client    │                │                             │
+│            │ ◄───────────── │  1. Writes change to DB     │
+│  (live UI) │   Socket.IO    │  2. PostgreSQL trigger fires │
+└────────────┘   WebSocket    │  3. pg_notify() sends event  │
+                              │  4. Backend broadcasts to    │
+                              │     all connected clients    │
+                              └──────────────┬──────────────┘
+                                             │ LISTEN/NOTIFY
+                                    ┌────────▼────────┐
+                                    │   PostgreSQL 17  │
+                                    │                  │
+                                    │  orders table +  │
+                                    │  trigger function│
+                                    └─────────────────┘
 ```
+
+**Step-by-step flow:**
+
+1. A user creates/updates/deletes an order via the browser form (REST API call)
+2. Node.js writes the change to PostgreSQL
+3. A PostgreSQL **trigger** (`orders_change_trigger`) fires automatically on every `INSERT`, `UPDATE`, or `DELETE`
+4. The trigger calls `pg_notify('orders_channel', payload)` with a JSON payload containing the operation type and row data
+5. The backend has a **dedicated LISTEN connection** (`notificationService.js`) permanently subscribed to `orders_channel`
+6. On receiving a notification, the backend **broadcasts** the event to all connected browsers via Socket.IO (WebSocket)
+7. The browser updates the orders table and event log **instantly** — no polling, no delay
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Database | PostgreSQL 17 |
-| Backend | Node.js + Express.js |
-| Real-Time | PostgreSQL LISTEN/NOTIFY + Socket.IO |
-| Frontend | Vanilla HTML / CSS / JavaScript |
-| Containers | Docker + Docker Compose |
+| Layer | Technology | Why |
+|---|---|---|
+| **Database** | PostgreSQL 17 | Native `LISTEN/NOTIFY` support; no extra message broker needed |
+| **Backend** | Node.js 20 + Express.js | Non-blocking I/O; perfect for event-driven architecture |
+| **Real-Time Transport** | Socket.IO (WebSocket) | Reliable bidirectional communication; automatic reconnection |
+| **DB Change Detection** | PostgreSQL LISTEN/NOTIFY | Zero-overhead; triggers fire inside the DB transaction itself |
+| **Frontend** | Vanilla HTML / CSS / JavaScript | Zero dependencies; served directly by the backend |
+
+---
+
+## Why LISTEN/NOTIFY + WebSockets? (Not Polling)
+
+### The Problem with Polling
+
+With polling, every client repeatedly asks the server "Did anything change?" on a fixed interval:
+
+```
+Client → Server: "Any changes?" → DB query → "No"   (wasted)
+Client → Server: "Any changes?" → DB query → "No"   (wasted)
+Client → Server: "Any changes?" → DB query → "Yes"  (finally useful)
+```
+
+| | Polling | LISTEN/NOTIFY + WebSocket |
+|---|---|---|
+| **Latency** | Up to poll interval (1–30 s) | Under 10 ms |
+| **DB load at idle** | Constant (many queries) | Zero |
+| **Server load** | Scales badly with more clients | Stays flat |
+| **Bandwidth** | Wasted on empty responses | Only used when data changes |
+
+**Example:** With 10,000 clients polling every 5 seconds → **2,000 requests/second** even when nothing changes.  
+With LISTEN/NOTIFY, the load is **zero at idle** — the DB pushes events only when something actually changes.
+
+### Why PostgreSQL LISTEN/NOTIFY Specifically?
+
+- Built into PostgreSQL — no extra tools like Kafka, Redis, or Debezium needed
+- The trigger fires **inside the database transaction**, so notifications are guaranteed to be consistent with committed data
+- The Node.js `pg` library natively supports `LISTEN` on a persistent connection
+- Keeps the architecture simple and easy to deploy
 
 ---
 
@@ -64,19 +109,23 @@ Build a system where connected clients automatically receive updates whenever th
 ```
 order-notifications/
 ├── backend/
-│   ├── server.js                        # Entry point
+│   ├── server.js
 │   ├── src/
-│   │   ├── app.js                       # Express + Socket.IO setup
-│   │   ├── config/database.js           # DB connection pool
-│   │   ├── routes/orderRoutes.js        # REST endpoints
-│   │   ├── controllers/orderController.js
+│   │   ├── app.js
+│   │   ├── config/
+│   │   │   └── database.js
+│   │   ├── routes/
+│   │   │   └── orderRoutes.js
+│   │   ├── controllers/
+│   │   │   └── orderController.js
 │   │   ├── services/
-│   │   │   ├── orderService.js          # SQL queries
-│   │   │   └── notificationService.js  # LISTEN/NOTIFY bridge
+│   │   │   ├── orderService.js
+│   │   │   └── notificationService.js
 │   │   ├── middleware/
 │   │   │   ├── logger.js
 │   │   │   └── errorHandler.js
-│   │   └── db/migrations/001_init.sql   # Table + trigger SQL
+│   │   └── db/migrations/
+│   │       └── 001_init.sql
 │   ├── Dockerfile
 │   └── package.json
 ├── frontend/
@@ -89,73 +138,96 @@ order-notifications/
 
 ---
 
-## Setup Instructions
+## How to Run (Without Docker — Windows CMD)
 
-### Option A — Docker (recommended, one command)
+### Prerequisites
 
-```bash
-# 1. Copy the environment file
-cp .env.example .env
+- Node.js ≥ 20 ([nodejs.org](https://nodejs.org))
+- PostgreSQL 17 installed and running as a Windows service
 
-# 2. Start everything
-docker compose up --build
+### Step 1 — Set up the Database
 
-# 3. Open the app
-open http://localhost:3000
+Open **Command Prompt** and run:
+
+```cmd
+set PGPASSWORD=postgres
+"C:\Program Files\PostgreSQL\17\bin\psql.exe" -U postgres -c "CREATE DATABASE ordersdb;"
+"C:\Program Files\PostgreSQL\17\bin\psql.exe" -U postgres -d ordersdb -f "backend\src\db\migrations\001_init.sql"
 ```
 
-The migration SQL runs automatically on first PostgreSQL boot.
+This creates the `orders` table, the trigger function, and inserts 1 sample row (Rohit — Wireless Headphones).
 
-### Option B — Run Locally
+### Step 2 — Install Backend Dependencies
 
-**Requirements:** Node.js ≥ 20, PostgreSQL 14+
-
-```bash
-# 1. Create the database and run the migration
-createdb ordersdb
-psql -U postgres -d ordersdb -f backend/src/db/migrations/001_init.sql
-
-# 2. Install dependencies
+```cmd
 cd backend
-cp .env.example .env
 npm install
-
-# 3. Start the server
-npm start
-# or with file-watch reload:
-npm run dev
-
-# 4. Open http://localhost:3000
 ```
+
+### Step 3 — Start the Backend
+
+```cmd
+npm start
+```
+
+You should see:
+```
+✅ Database connection successful
+🚀 Server running on http://localhost:3000
+📡 Socket.IO ready for connections
+👂 Listening on PostgreSQL channel "orders_channel"
+```
+
+### Step 4 — Open the App
+
+Open your browser and go to: **http://localhost:3000**
+
+The backend also serves the frontend — no separate server needed.
 
 ---
 
-## REST API
+## How to Run (Docker — One Command)
 
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/orders` | Get all orders |
-| POST | `/orders` | Create a new order |
-| PUT | `/orders/:id` | Update an order (any field) |
-| DELETE | `/orders/:id` | Delete an order |
-| GET | `/health` | Health check |
+```bash
+docker compose up --build
+```
+
+Then open: **http://localhost:3000**
+
+---
+
+## REST API Reference
+
+| Method | Endpoint | Body | Description |
+|---|---|---|---|
+| `GET` | `/orders` | — | Fetch all orders |
+| `POST` | `/orders` | `{ customer_name, product_name, status }` | Create a new order |
+| `PUT` | `/orders/:id` | `{ customer_name?, product_name?, status? }` | Update an order |
+| `DELETE` | `/orders/:id` | — | Delete an order |
+| `GET` | `/health` | — | Health check |
 
 **Example — Create an order:**
 ```bash
 curl -X POST http://localhost:3000/orders \
-  -H 'Content-Type: application/json' \
-  -d '{"customer_name":"Alice","product_name":"Keyboard","status":"pending"}'
+  -H "Content-Type: application/json" \
+  -d "{\"customer_name\":\"Rohit\",\"product_name\":\"Keyboard\",\"status\":\"pending\"}"
+```
+
+**Example — Update status:**
+```bash
+curl -X PUT http://localhost:3000/orders/1 \
+  -H "Content-Type: application/json" \
+  -d "{\"status\":\"shipped\"}"
 ```
 
 ---
 
-## Environment Variables
-
-Copy `backend/.env.example` to `backend/.env` and set:
+## Environment Variables (`backend/.env`)
 
 ```env
 PORT=3000
 NODE_ENV=development
+LOG_LEVEL=info
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=ordersdb
@@ -163,25 +235,3 @@ DB_USER=postgres
 DB_PASSWORD=postgres
 CORS_ORIGIN=*
 ```
-
----
-
-## Why Not Polling?
-
-| | Polling | LISTEN/NOTIFY |
-|---|---|---|
-| **Latency** | Up to poll interval (1–30s) | Under 10ms |
-| **DB load at idle** | Constant (many requests) | Zero |
-| **Scalability** | Gets worse with more clients | Stays flat |
-
-With 10,000 clients polling every 5 seconds, you get **2,000 requests/second** even when nothing changes. With LISTEN/NOTIFY, the load is nearly **zero** at idle.
-
----
-
-## Future Improvements
-
-- [ ] Add JWT authentication for WebSocket connections
-- [ ] Add Redis adapter for running multiple backend instances
-- [ ] Add per-user rooms so clients only see their own orders
-- [ ] Add input validation with `zod`
-- [ ] Add unit tests with `vitest`
